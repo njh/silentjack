@@ -2,7 +2,7 @@
 
 	silentjack.c
 	Silence/dead air detector for JACK
-	Copyright (C) 2005  Nicholas J. Humfrey
+	Copyright (C) 2006  Nicholas J. Humfrey
 	
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
@@ -25,46 +25,50 @@
 #include <math.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <jack/jack.h>
 #include <getopt.h>
 #include "config.h"
+#include "db.h"
 
 
-float bias = 1.0f;
-float peak = 0.0f;
+#define DEFAULT_CLIENT_NAME		"silentjack"
 
-int dpeak = 0;
 
-jack_port_t *input_port = NULL;
-jack_client_t *client = NULL;
+// *** Globals ***
+jack_port_t *input_port = NULL;		// Our single jack input port
+float peak = 0.0f;					// Current peak signal level (linear)
+int running = 1;					// SilentJack keeps running while true
+int quiet = 0;						// If true, don't send messages to stdout
+int verbose = 0;					// If trye, send more messages to stdout
 
 
 
 /* Read and reset the recent peak sample */
-static float read_peak()
+static
+float read_peak()
 {
-	float tmp = peak;
+	float peakdb = lin2db(peak);
 	peak = 0.0f;
 
-	return tmp;
+	return peakdb;
 }
 
 
 /* Callback called by JACK when audio is available.
    Stores value of peak sample */
-static int process_peak(jack_nframes_t nframes, void *arg)
+static
+int process_peak(jack_nframes_t nframes, void *arg)
 {
 	jack_default_audio_sample_t *in;
 	unsigned int i;
-
 
 	/* just incase the port isn't registered yet */
 	if (input_port == NULL) {
 		return 0;
 	}
-
 
 	/* get the audio samples, and find the peak sample */
 	in = (jack_default_audio_sample_t *) jack_port_get_buffer(input_port, nframes);
@@ -80,271 +84,219 @@ static int process_peak(jack_nframes_t nframes, void *arg)
 }
 
 
-/*
-	db: the signal stength in db
-	width: the size of the meter
-*/
-static int iec_scale(float db, int size) {
-	float def = 0.0f; /* Meter deflection %age */
-	
-	if (db < -70.0f) {
-		def = 0.0f;
-	} else if (db < -60.0f) {
-		def = (db + 70.0f) * 0.25f;
-	} else if (db < -50.0f) {
-		def = (db + 60.0f) * 0.5f + 2.5f;
-	} else if (db < -40.0f) {
-		def = (db + 50.0f) * 0.75f + 7.5;
-	} else if (db < -30.0f) {
-		def = (db + 40.0f) * 1.5f + 15.0f;
-	} else if (db < -20.0f) {
-		def = (db + 30.0f) * 2.0f + 30.0f;
-	} else if (db < 0.0f) {
-		def = (db + 20.0f) * 2.5f + 50.0f;
-	} else {
-		def = 100.0f;
-	}
-	
-	return (int)( (def / 100.0f) * ((float) size) );
-}
-
-
-/* Close down JACK when exiting */
-static void cleanup()
-{
-	const char **all_ports;
-	unsigned int i;
-
-	fprintf(stderr,"cleanup()\n");
-
-	if (input_port != NULL ) {
-
-		all_ports = jack_port_get_all_connections(client, input_port);
-
-		for (i=0; all_ports && all_ports[i]; i++) {
-			jack_disconnect(client, all_ports[i], jack_port_name(input_port));
-		}
-	}
-
-	/* Leave the jack graph */
-	jack_client_close(client);
-
-}
 
 
 /* Connect the chosen port to ours */
-static void connect_port(jack_client_t *client, char *port_name)
+static
+void connect_jack_port( jack_client_t *client, jack_port_t *port, const char* in )
 {
-	jack_port_t *port;
-
-	// Get the port we are connecting to
-	port = jack_port_by_name(client, port_name);
-	if (port == NULL) {
-		fprintf(stderr, "Can't find port '%s'\n", port_name);
-		exit(1);
-	}
-
-	// Connect the port to our input port
-	fprintf(stderr,"Connecting '%s' to '%s'...\n", jack_port_name(port), jack_port_name(input_port));
-	if (jack_connect(client, jack_port_name(port), jack_port_name(input_port))) {
-		fprintf(stderr, "Cannot connect port '%s' to '%s'\n", jack_port_name(port), jack_port_name(input_port));
+	const char* out = jack_port_name( port );
+	int err;
+		
+	if (!quiet) printf("Connecting %s to %s\n", out, in);
+	
+	if ((err = jack_connect(client, out, in)) != 0) {
+		fprintf(stderr, "connect_jack_port(): failed to jack_connect() ports: %d\n",err);
 		exit(1);
 	}
 }
 
 
-/* Sleep for a fraction of a second */
-static int fsleep( float secs )
+static
+void shutdown_callback_jack(void *arg)
 {
-
-//#ifdef HAVE_USLEEP
-	return usleep( secs * 1000000 );
-//#endif
+	running = 0;
 }
 
-
-/* Display how to use this program */
-static int usage( const char * progname )
+static
+jack_client_t* init_jack( const char * client_name, const char* connect_port ) 
 {
-	fprintf(stderr, "jackmeter version %s\n\n", VERSION);
-	fprintf(stderr, "Usage %s [-f freqency] [-r ref-level] [-w width] [-n] [<port>, ...]\n\n", progname);
-	fprintf(stderr, "where  -f      is how often to update the meter per second [8]\n");
-	fprintf(stderr, "       -r      is the reference signal level for 0dB on the meter\n");
-	fprintf(stderr, "       -w      is how wide to make the meter [79]\n");
-	fprintf(stderr, "       -n      changes mode to output meter level as number in decibels\n");
-	fprintf(stderr, "       <port>  the port(s) to monitor (multiple ports are mixed)\n");
-	exit(1);
-}
-
-
-void display_scale( int width )
-{
-	int i=0;
-	const int marks[11] = { 0, -5, -10, -15, -20, -25, -30, -35, -40, -50, -60 };
-	char *scale = malloc( width+1 );
-	char *line = malloc( width+1 );
-	
-	
-	// Initialise the scale
-	for(i=0; i<width; i++) { scale[i] = ' '; line[i]='_'; }
-	scale[width] = 0;
-	line[width] = 0;
-	
-	
-	// 'draw' on each of the db marks
-	for(i=0; i < 11; i++) {
-		char mark[5];
-		int pos = iec_scale( marks[i], width )-1;
-		int spos, slen;
-		
-		// Create string of the db value
-		snprintf(mark, 4, "%d", marks[i]);
-		
-		// Position the label string
-		slen = strlen(mark);
-		spos = pos-(slen/2);
-		if (spos<0) spos=0;
-		if (spos+strlen(mark)>width) spos=width-slen;
-		memcpy( scale+spos, mark, slen );
-		
-		// Position little marker
-		line[pos] = '|';
-	}
-	
-	// Print it to screen
-	printf("%s\n", scale);
-	printf("%s\n", line);
-	free(scale);
-	free(line);
-}
-
-
-void display_meter( int db, int width )
-{
-	int size = iec_scale( db, width );
-	int i;
-	
-	if (size > dpeak) {
-		dpeak = size;
-		dtime = 0;
-	} else if (dtime++ > decay_len) {
-		dpeak = size;
-	}
-	
-	printf("\r");
-	
-	for(i=0; i<size-1; i++) { printf("#"); }
-	
-	if (dpeak==size) {
-		printf("I");
-	} else {
-		printf("#");
-		for(i=0; i<dpeak-size-1; i++) { printf(" "); }
-		printf("I");
-	}
-	
-	for(i=0; i<width-dpeak; i++) { printf(" "); }
-}
-
-
-int main(int argc, char *argv[])
-{
-	int console_width = 79;
 	jack_status_t status;
-	int running = 1;
-	float ref_lev;
-	int decibels_mode = 0;
-	int rate = 8;
-	int opt;
-
-	// Make STDOUT unbuffered
-	setbuf(stdout, NULL);
-
-	while ((opt = getopt(argc, argv, "w:f:r:nhv")) != -1) {
-		switch (opt) {
-			case 'r':
-				ref_lev = atof(optarg);
-				fprintf(stderr,"Reference level: %.1fdB\n", ref_lev);
-				bias = powf(10.0f, ref_lev * -0.05f);
-				break;
-			case 'f':
-				rate = atoi(optarg);
-				fprintf(stderr,"Updates per second: %d\n", rate);
-				break;
-			case 'w':
-				console_width = atoi(optarg);
-				fprintf(stderr,"Console Width: %d\n", console_width);
-				break;
-			case 'n':
-				decibels_mode = 1;
-				break;
-			case 'h':
-			case 'v':
-			default:
-				/* Show usage/version information */
-				usage( argv[0] );
-				break;
-		}
-	}
-
-
+	jack_options_t options = JackNoStartServer;
+	jack_client_t *client = NULL;
 
 	// Register with Jack
-	if ((client = jack_client_open("meter", JackNullOption, &status)) == 0) {
+	if ((client = jack_client_open(client_name, options, &status)) == 0) {
 		fprintf(stderr, "Failed to start jack client: %d\n", status);
 		exit(1);
 	}
-	fprintf(stderr,"Registering as '%s'.\n", jack_get_client_name( client ) );
+	if (!quiet) printf("JACK client registered as '%s'.\n", jack_get_client_name( client ) );
 
-	// Create our input port
-	if (!(input_port = jack_port_register(client, "meter", JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0))) {
-		fprintf(stderr, "Cannot register input port 'meter'.\n");
+	// Create our pair of output ports
+	if (!(input_port = jack_port_register(client, "in", JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0))) {
+		fprintf(stderr, "Cannot register input port 'in'.\n");
 		exit(1);
 	}
 	
-	// Register the cleanup function to be called when program exits
-	atexit( cleanup );
+	// Register shutdown callback
+	jack_on_shutdown (client, shutdown_callback_jack, NULL );
 
-	// Register the peak signal callback
+	// Register the peak audio callback
 	jack_set_process_callback(client, process_peak, 0);
 
-
+	// Activate the client
 	if (jack_activate(client)) {
 		fprintf(stderr, "Cannot activate client.\n");
 		exit(1);
 	}
-
-
-	// Connect our port to specified port(s)
-	if (argc > optind) {
-		while (argc > optind) {
-			connect_port( client, argv[ optind ] );
-			optind++;
-		}
-	} else {
-		fprintf(stderr,"Meter is not connected to a port.\n");
-	}
-
-	// Calculate the decay length (should be 1600ms)
-	decay_len = (int)(1.6f / (1.0f/rate));
 	
+	// Connect up our input port ?
+	if (connect_port) {
+		connect_jack_port( client, input_port, connect_port );
+	}
+	
+	return client;
+}
 
-	// Display the scale
-	if (decibels_mode==0) {
-		display_scale( console_width );
+
+static
+void finish_jack( jack_client_t *client )
+{
+	// Leave the Jack graph
+	jack_client_close(client);
+}
+
+
+static
+void run_command( int argc, char* argv[] )
+{
+	pid_t child;
+	int status;
+	
+	// No command to execute
+	if (argc<1) return;
+	
+	// Fork new process
+	child = fork();
+	if (child==0) {
+		// Child process here
+		if (execvp( argv[0], argv )) {
+			perror("execvp failed");
+			exit(-1);
+		}
+	} else if (child==-1) {
+		// Fork failed
+		perror("fork failed");
+		exit(-1);
+	}
+	
+	// Wait for process to end
+	if (waitpid( child, &status, 0)==-1) {
+		perror("waitpid failed");
+	}
+}
+
+
+/* Display how to use this program */
+static
+void usage()
+{
+	printf("%s version %s\n\n", PACKAGE_NAME, PACKAGE_VERSION);
+	printf("Usage: silentjack [options] [COMMAND [ARG]...]\n\n");
+	printf("Options:  -c <port>   Connect to this port\n");
+	printf("          -n <name>   Name of this client (default 'silentjack')\n");
+	printf("          -l <db>     Trigger level (default -40 decibels)\n");
+	printf("          -p <secs>   Period of silence required (default 1 second)\n");
+	printf("          -g <secs>   Grace period (default 0 seconds)\n");
+	printf("          -v          Enable verbose mode\n");
+	printf("          -q          Enable quiet mode\n");
+	exit(1);
+}
+
+
+
+int main(int argc, char *argv[])
+{
+	jack_client_t *client = NULL;
+	const char* client_name = DEFAULT_CLIENT_NAME;
+	const char* connect_port = NULL;
+	int silence_period = 1;			// Required period of silence for trigger
+	int grace_period = 0;			// Period to wait before triggering again
+	float trigger_level = -40;		// Level considered silent
+	int silence_count = 0;			// Number of seconds of silence detected
+	int in_grace = 0;				// Number of seconds left in grace
+	int opt;
+
+	// Parse command line arguments
+	while ((opt = getopt(argc, argv, "c:n:l:p:g:vqh")) != -1) {
+		switch (opt) {
+			case 'c': connect_port = optarg; break;
+			case 'n': client_name = optarg; break;
+			case 'l': trigger_level = atof(optarg); break;
+			case 'p': silence_period = fabs(atoi(optarg)); break;
+			case 'g': grace_period = fabs(atoi(optarg)); break;
+			case 'v': verbose = 1; break;
+			case 'q': quiet = 1; break;
+			case 'h':
+			default:
+				/* Show usage information */
+				usage();
+				break;
+		}
+	}
+    argc -= optind;
+    argv += optind;
+
+	
+	// Validate parameters
+	if (quiet && verbose) {
+    	fprintf(stderr, "Can't be quiet and verbose at the same time.\n");
+    	usage();
 	}
 
+	// Initialise Jack
+	client = init_jack( client_name, connect_port );
+	
+	
+	// Main loop
 	while (running) {
-		float db = 20.0f * log10f(read_peak() * bias);
+		float peakdb;
+	
+		// Sleep for 1 second
+		usleep( 1000000 );
 		
-		if (decibels_mode==1) {
-			printf("%1.1f\n", db);
-		} else {
-			display_meter( db, console_width );
+		// Are we in grace period ?
+		if (in_grace) {
+			in_grace--;
+			if (verbose) printf("%d seconds left in grace period.\n", in_grace);
+			continue;
+		}
+
+		// Check we are connected to something
+		if (jack_port_connected(input_port)==0) {
+			if (verbose) printf("Input port isn't connected to anything.\n");
+			continue;
 		}
 		
-		fsleep( 1.0f/rate );
+		// Read the recent peak (in decibels)
+		peakdb = read_peak();
+		if (verbose) printf("peak: %2.2fdB", peakdb);
+		
+		
+		// Is peak too low?
+		if (peakdb < trigger_level) {
+			silence_count++;
+			if (verbose) printf(" (%d seconds of silence)\n", silence_count);
+		} else {
+			if (verbose) printf(" (not silent)\n");
+			silence_count=0;
+			continue;
+		}
+		
+		// Have we had enough seconds of silence?
+		if (silence_count >= silence_period) {
+			if (!quiet) printf("**SILENCE**\n");
+			run_command( argc, argv );
+			silence_count = 0;
+			in_grace = grace_period;
+		}
+		
 	}
+
+
+	// Clean up
+	finish_jack( client );
+
 
 	return 0;
 }
