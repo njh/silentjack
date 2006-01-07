@@ -192,7 +192,7 @@ static
 void usage()
 {
 	printf("%s version %s\n\n", PACKAGE_NAME, PACKAGE_VERSION);
-	printf("Usage: silentjack [options] [COMMAND [ARG]...]\n\n");
+	printf("Usage: silentjack [options] [COMMAND [ARG]...]\n");
 	printf("Options:  -c <port>   Connect to this port\n");
 	printf("          -n <name>   Name of this client (default 'silentjack')\n");
 	printf("          -l <db>     Trigger level (default -40 decibels)\n");
