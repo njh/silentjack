@@ -217,6 +217,9 @@ int main(int argc, char *argv[])
 	int in_grace = 0;				// Number of seconds left in grace
 	int opt;
 
+	// Make STDOUT unbuffered
+	setbuf(stdout, NULL);
+
 	// Parse command line arguments
 	while ((opt = getopt(argc, argv, "c:n:l:p:g:vqh")) != -1) {
 		switch (opt) {
