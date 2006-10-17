@@ -42,7 +42,7 @@ jack_port_t *input_port = NULL;		// Our single jack input port
 float peak = 0.0f;					// Current peak signal level (linear)
 int running = 1;					// SilentJack keeps running while true
 int quiet = 0;						// If true, don't send messages to stdout
-int verbose = 0;					// If trye, send more messages to stdout
+int verbose = 0;					// If true, send more messages to stdout
 
 
 
@@ -197,6 +197,8 @@ void usage()
 	printf("          -n <name>   Name of this client (default 'silentjack')\n");
 	printf("          -l <db>     Trigger level (default -40 decibels)\n");
 	printf("          -p <secs>   Period of silence required (default 1 second)\n");
+	printf("          -d <db>     No-dynamic trigger level (default disabled)\n");
+	printf("          -P <secs>   No-dynamic period (default 10 seconds)\n");
 	printf("          -g <secs>   Grace period (default 0 seconds)\n");
 	printf("          -v          Enable verbose mode\n");
 	printf("          -q          Enable quiet mode\n");
@@ -210,10 +212,15 @@ int main(int argc, char *argv[])
 	jack_client_t *client = NULL;
 	const char* client_name = DEFAULT_CLIENT_NAME;
 	const char* connect_port = NULL;
+	float peakdb = 0.0f;			// The current peak signal level (in dB)
+	float last_peakdb = 0.0f;		// The previous peak signal level (in dB)
 	int silence_period = 1;			// Required period of silence for trigger
+	int nodynamic_period = 10;		// Required period of no-dynamic for trigger
 	int grace_period = 0;			// Period to wait before triggering again
-	float trigger_level = -40;		// Level considered silent
+	float silence_theshold = -40;	// Level considered silent (in dB)
+	float nodynamic_theshold = 0;	// Minimum allowed delta between peaks (in dB)
 	int silence_count = 0;			// Number of seconds of silence detected
+	int nodynamic_count = 0;		// Number of seconds of no-dynamic detected
 	int in_grace = 0;				// Number of seconds left in grace
 	int opt;
 
@@ -221,12 +228,14 @@ int main(int argc, char *argv[])
 	setbuf(stdout, NULL);
 
 	// Parse command line arguments
-	while ((opt = getopt(argc, argv, "c:n:l:p:g:vqh")) != -1) {
+	while ((opt = getopt(argc, argv, "c:n:l:p:P:d:g:vqh")) != -1) {
 		switch (opt) {
 			case 'c': connect_port = optarg; break;
 			case 'n': client_name = optarg; break;
-			case 'l': trigger_level = atof(optarg); break;
+			case 'l': silence_theshold = atof(optarg); break;
 			case 'p': silence_period = fabs(atoi(optarg)); break;
+			case 'd': nodynamic_theshold = atof(optarg); break;
+			case 'P': nodynamic_period = atof(optarg); break;
 			case 'g': grace_period = fabs(atoi(optarg)); break;
 			case 'v': verbose = 1; break;
 			case 'q': quiet = 1; break;
@@ -253,7 +262,6 @@ int main(int argc, char *argv[])
 	
 	// Main loop
 	while (running) {
-		float peakdb;
 	
 		// Sleep for 1 second
 		usleep( 1000000 );
@@ -270,29 +278,63 @@ int main(int argc, char *argv[])
 			if (verbose) printf("Input port isn't connected to anything.\n");
 			continue;
 		}
-		
+	
+	
 		// Read the recent peak (in decibels)
+		last_peakdb = peakdb;
 		peakdb = read_peak();
-		if (verbose) printf("peak: %2.2fdB", peakdb);
 		
 		
-		// Is peak too low?
-		if (peakdb < trigger_level) {
-			silence_count++;
-			if (verbose) printf(" (%d seconds of silence)\n", silence_count);
-		} else {
-			if (verbose) printf(" (not silent)\n");
-			silence_count=0;
-			continue;
+		// Do silence detection?
+		if (silence_theshold) {
+			if (verbose) printf("peak: %2.2fdB", peakdb);
+		
+			// Is peak too low?
+			if (peakdb < silence_theshold) {
+				silence_count++;
+				if (verbose) printf(" (%d seconds of silence)\n", silence_count);
+			} else {
+				if (verbose) printf(" (not silent)\n");
+				silence_count=0;
+			}
+	
+			// Have we had enough seconds of silence?
+			if (silence_count >= silence_period) {
+				if (!quiet) printf("**SILENCE**\n");
+				run_command( argc, argv );
+				silence_count = 0;
+				in_grace = grace_period;
+			}
+			
 		}
 		
-		// Have we had enough seconds of silence?
-		if (silence_count >= silence_period) {
-			if (!quiet) printf("**SILENCE**\n");
-			run_command( argc, argv );
-			silence_count = 0;
-			in_grace = grace_period;
+		
+		// Do no-dynamic detection
+		if (nodynamic_theshold) {
+			
+			if (verbose) printf("delta: %2.2fdB", fabs(last_peakdb-peakdb));
+			
+			// Check the dynamic/delta between peaks
+			if (fabs(last_peakdb-peakdb) < nodynamic_theshold) {
+				nodynamic_count++;
+				if (verbose) printf(" (%d seconds of no dynamic)\n", nodynamic_count);
+			} else {
+				if (verbose) printf(" (dynamic)\n");
+				nodynamic_count=0;
+			}
+	
+			// Have we had enough seconds of no dynamic?
+			if (nodynamic_count >= nodynamic_period) {
+				if (!quiet) printf("**NO DYNAMIC**\n");
+				run_command( argc, argv );
+				nodynamic_count = 0;
+				in_grace = grace_period;
+			}
+	
 		}
+
+
+
 		
 	}
 
