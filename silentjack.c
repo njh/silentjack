@@ -88,9 +88,9 @@ int process_peak(jack_nframes_t nframes, void *arg)
 
 /* Connect the chosen port to ours */
 static
-void connect_jack_port( jack_client_t *client, jack_port_t *port, const char* in )
+void connect_jack_port( jack_client_t *client, jack_port_t *port, const char* out )
 {
-	const char* out = jack_port_name( port );
+	const char* in = jack_port_name( port );
 	int err;
 		
 	if (!quiet) printf("Connecting %s to %s\n", out, in);
