@@ -166,6 +166,9 @@ void run_command( int argc, char* argv[] )
 	// No command to execute
 	if (argc<1) return;
 	
+	// Exit successfully if command is called "exit"
+	if (argc==1 && strcmp(argv[0], "exit")==0) exit(0);
+
 	// Fork new process
 	child = fork();
 	if (child==0) {
