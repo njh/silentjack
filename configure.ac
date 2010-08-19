@@ -5,7 +5,7 @@ AC_PREREQ(2.57)
 
 dnl ############# Initialization
 
-AC_INIT([silentjack], [0.2], [njh@ecs.soton.ac.uk])
+AC_INIT([silentjack], [0.2], [njh@aelius.com])
 
 AC_CONFIG_SRCDIR(silentjack.c)
 AC_CANONICAL_SYSTEM
