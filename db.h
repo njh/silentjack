@@ -19,6 +19,9 @@
 #ifndef DB_H
 #define DB_H
 
+/* minus_90_db = db2lin(-90.0f) */
+static const float minus_90_db = 0.00003162327766f;
+
 static inline float
 db2lin( float db )
 {
@@ -31,7 +34,7 @@ db2lin( float db )
 static inline float
 lin2db( float lin )
 {
-	if (lin == 0.0f) return -90.0f;
+	if (lin <= minus_90_db) return -90.0f;
 	else return (20.0f * log10f(lin));
 }
 
