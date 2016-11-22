@@ -43,6 +43,7 @@ float peak = 0.0f;					// Current peak signal level (linear)
 int running = 1;					// SilentJack keeps running while true
 int quiet = 0;						// If true, don't send messages to stdout
 int verbose = 0;					// If true, send more messages to stdout
+int reverse = 0;                    // If true, reverse behaviour
 
 
 
@@ -205,6 +206,7 @@ void usage()
 	printf("          -g <secs>   Grace period (default 0 seconds)\n");
 	printf("          -v          Enable verbose mode\n");
 	printf("          -q          Enable quiet mode\n");
+	printf("          -r          Enable reverse behaviour mode\n");
 	exit(1);
 }
 
@@ -231,7 +233,7 @@ int main(int argc, char *argv[])
 	setbuf(stdout, NULL);
 
 	// Parse command line arguments
-	while ((opt = getopt(argc, argv, "c:n:l:p:P:d:g:vqh")) != -1) {
+	while ((opt = getopt(argc, argv, "c:n:l:p:P:d:g:vqhr")) != -1) {
 		switch (opt) {
 			case 'c': connect_port = optarg; break;
 			case 'n': client_name = optarg; break;
@@ -242,6 +244,7 @@ int main(int argc, char *argv[])
 			case 'g': grace_period = fabs(atoi(optarg)); break;
 			case 'v': verbose = 1; break;
 			case 'q': quiet = 1; break;
+			case 'r': reverse = 1; break;			
 			case 'h':
 			default:
 				/* Show usage information */
@@ -293,17 +296,30 @@ int main(int argc, char *argv[])
 			if (verbose) printf("peak: %2.2fdB", peakdb);
 		
 			// Is peak too low?
-			if (peakdb < silence_theshold) {
-				silence_count++;
-				if (verbose) printf(" (%d seconds of silence)\n", silence_count);
+			if (!reverse) {
+				if (peakdb < silence_theshold) {
+					silence_count++;
+					if (verbose) printf(" (%d seconds of silence)\n", silence_count);
+				} else {
+					if (verbose) printf(" (not silent)\n");
+					silence_count=0;
+				}
 			} else {
-				if (verbose) printf(" (not silent)\n");
-				silence_count=0;
+				if (peakdb >= silence_theshold) {
+					silence_count++;
+					if (verbose) printf(" (%d seconds of noise)\n", silence_count);
+				} else {
+					if (verbose) printf(" (not noisy)\n");
+					silence_count=0;
+				}
 			}
-	
 			// Have we had enough seconds of silence?
 			if (silence_count >= silence_period) {
-				if (!quiet) printf("**SILENCE**\n");
+				if (!reverse) {
+					if (!quiet) printf("**SILENCE**\n");
+				} else {
+					if (!quiet) printf("**NOISY**\n");
+				}
 				run_command( argc, argv );
 				silence_count = 0;
 				in_grace = grace_period;
@@ -318,14 +334,23 @@ int main(int argc, char *argv[])
 			if (verbose) printf("delta: %2.2fdB", fabs(last_peakdb-peakdb));
 			
 			// Check the dynamic/delta between peaks
-			if (fabs(last_peakdb-peakdb) < nodynamic_theshold) {
-				nodynamic_count++;
-				if (verbose) printf(" (%d seconds of no dynamic)\n", nodynamic_count);
+			if (!reverse) {
+				if (fabs(last_peakdb-peakdb) < nodynamic_theshold) {
+					nodynamic_count++;
+					if (verbose) printf(" (%d seconds of no dynamic)\n", nodynamic_count);
+				} else {
+					if (verbose) printf(" (dynamic)\n");
+					nodynamic_count=0;
+				}
 			} else {
-				if (verbose) printf(" (dynamic)\n");
-				nodynamic_count=0;
-			}
-	
+				if (fabs(last_peakdb-peakdb) >= nodynamic_theshold) {
+					nodynamic_count++;
+					if (verbose) printf(" (%d seconds of no dynamic)\n", nodynamic_count);
+				} else {
+					if (verbose) printf(" (dynamic)\n");
+					nodynamic_count=0;
+				}
+			 }	
 			// Have we had enough seconds of no dynamic?
 			if (nodynamic_count >= nodynamic_period) {
 				if (!quiet) printf("**NO DYNAMIC**\n");
@@ -333,12 +358,7 @@ int main(int argc, char *argv[])
 				nodynamic_count = 0;
 				in_grace = grace_period;
 			}
-	
 		}
-
-
-
-		
 	}
 
 
