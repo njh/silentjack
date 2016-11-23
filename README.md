@@ -20,6 +20,7 @@ SilentJack is a silence/dead air detector for the Jack Audio Connection Kit.
               -p <secs>   Period of silence required (default 1 second)
               -g <secs>   Grace period (default 0 seconds)
               -v          Enable verbose mode
+              -r          Enable reverse behaviour (detect noise)
               -q          Enable quiet mode
 
 SilentJack runs COMMAND after silence has been detected for the given 
