@@ -7,6 +7,7 @@
 aclocal.m4
 autom4te.cache
 build-scripts/*.m4
+build-scripts/compile
 build-scripts/config.guess
 build-scripts/config.sub
 build-scripts/depcomp
