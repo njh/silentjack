@@ -3,17 +3,17 @@
 	silentjack.c
 	Silence/dead air detector for JACK
 	Copyright (C) 2006  Nicholas J. Humfrey
-	
+
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
 	as published by the Free Software Foundation; either version 2
 	of the License, or (at your option) any later version.
-	
+
 	This program is distributed in the hope that it will be useful,
 	but WITHOUT ANY WARRANTY; without even the implied warranty of
 	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 	GNU General Public License for more details.
-	
+
 	You should have received a copy of the GNU General Public License
 	along with this program; if not, write to the Free Software
 	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -93,9 +93,9 @@ void connect_jack_port( jack_client_t *client, jack_port_t *port, const char* ou
 {
 	const char* in = jack_port_name( port );
 	int err;
-		
+
 	if (!quiet) printf("Connecting %s to %s\n", out, in);
-	
+
 	if ((err = jack_connect(client, out, in)) != 0) {
 		fprintf(stderr, "connect_jack_port(): failed to jack_connect() ports: %d\n",err);
 		exit(1);
@@ -110,7 +110,7 @@ void shutdown_callback_jack(void *arg)
 }
 
 static
-jack_client_t* init_jack( const char * client_name, const char* connect_port ) 
+jack_client_t* init_jack( const char * client_name, const char *connect_port[], int connect_count )
 {
 	jack_status_t status;
 	jack_options_t options = JackNoStartServer;
@@ -128,7 +128,7 @@ jack_client_t* init_jack( const char * client_name, const char* connect_port )
 		fprintf(stderr, "Cannot register input port 'in'.\n");
 		exit(1);
 	}
-	
+
 	// Register shutdown callback
 	jack_on_shutdown (client, shutdown_callback_jack, NULL );
 
@@ -140,12 +140,15 @@ jack_client_t* init_jack( const char * client_name, const char* connect_port )
 		fprintf(stderr, "Cannot activate client.\n");
 		exit(1);
 	}
-	
+
 	// Connect up our input port ?
-	if (connect_port) {
-		connect_jack_port( client, input_port, connect_port );
+	int i=0;
+	for (i = 0; i < connect_count; i++) {
+		if (connect_port[i]) {
+			connect_jack_port( client, input_port, connect_port[i] );
+		}
 	}
-	
+
 	return client;
 }
 
@@ -163,10 +166,10 @@ void run_command( int argc, char* argv[] )
 {
 	pid_t child;
 	int status;
-	
+
 	// No command to execute
 	if (argc<1) return;
-	
+
 	// Exit successfully if command is called "exit"
 	if (argc==1 && strcmp(argv[0], "exit")==0) exit(0);
 
@@ -183,7 +186,7 @@ void run_command( int argc, char* argv[] )
 		perror("fork failed");
 		exit(-1);
 	}
-	
+
 	// Wait for process to end
 	if (waitpid( child, &status, 0)==-1) {
 		perror("waitpid failed");
@@ -216,7 +219,9 @@ int main(int argc, char *argv[])
 {
 	jack_client_t *client = NULL;
 	const char* client_name = DEFAULT_CLIENT_NAME;
-	const char* connect_port = NULL;
+	// 8 possible connections should be enough, even for a 7.1 card
+	const char * connect_port[] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+	int connect_count = 0;		// Number of connect ports used
 	float peakdb = 0.0f;			// The current peak signal level (in dB)
 	float last_peakdb = 0.0f;		// The previous peak signal level (in dB)
 	int silence_period = 1;			// Required period of silence for trigger
@@ -235,7 +240,13 @@ int main(int argc, char *argv[])
 	// Parse command line arguments
 	while ((opt = getopt(argc, argv, "c:n:l:p:P:d:g:vqhr")) != -1) {
 		switch (opt) {
-			case 'c': connect_port = optarg; break;
+			case 'c': {
+				if (connect_count < (sizeof(connect_port)/sizeof(char *))) {
+					connect_port[connect_count] = optarg;
+					connect_count++;
+				}
+				break;
+			}
 			case 'n': client_name = optarg; break;
 			case 'l': silence_theshold = atof(optarg); break;
 			case 'p': silence_period = fabs(atoi(optarg)); break;
@@ -244,7 +255,7 @@ int main(int argc, char *argv[])
 			case 'g': grace_period = fabs(atoi(optarg)); break;
 			case 'v': verbose = 1; break;
 			case 'q': quiet = 1; break;
-			case 'r': reverse = 1; break;			
+			case 'r': reverse = 1; break;
 			case 'h':
 			default:
 				/* Show usage information */
@@ -255,7 +266,7 @@ int main(int argc, char *argv[])
     argc -= optind;
     argv += optind;
 
-	
+
 	// Validate parameters
 	if (quiet && verbose) {
     	fprintf(stderr, "Can't be quiet and verbose at the same time.\n");
@@ -263,15 +274,15 @@ int main(int argc, char *argv[])
 	}
 
 	// Initialise Jack
-	client = init_jack( client_name, connect_port );
-	
-	
+	client = init_jack( client_name, connect_port, connect_count );
+
+
 	// Main loop
 	while (running) {
-	
+
 		// Sleep for 1 second
 		usleep( 1000000 );
-		
+
 		// Are we in grace period ?
 		if (in_grace) {
 			in_grace--;
@@ -284,17 +295,17 @@ int main(int argc, char *argv[])
 			if (verbose) printf("Input port isn't connected to anything.\n");
 			continue;
 		}
-	
-	
+
+
 		// Read the recent peak (in decibels)
 		last_peakdb = peakdb;
 		peakdb = read_peak();
-		
-		
+
+
 		// Do silence detection?
 		if (silence_theshold) {
 			if (verbose) printf("peak: %2.2fdB", peakdb);
-		
+
 			// Is peak too low?
 			if (!reverse) {
 				if (peakdb < silence_theshold) {
@@ -324,15 +335,15 @@ int main(int argc, char *argv[])
 				silence_count = 0;
 				in_grace = grace_period;
 			}
-			
+
 		}
-		
-		
+
+
 		// Do no-dynamic detection
 		if (nodynamic_theshold) {
-			
+
 			if (verbose) printf("delta: %2.2fdB", fabs(last_peakdb-peakdb));
-			
+
 			// Check the dynamic/delta between peaks
 			if (!reverse) {
 				if (fabs(last_peakdb-peakdb) < nodynamic_theshold) {
@@ -350,7 +361,7 @@ int main(int argc, char *argv[])
 					if (verbose) printf(" (dynamic)\n");
 					nodynamic_count=0;
 				}
-			 }	
+			 }
 			// Have we had enough seconds of no dynamic?
 			if (nodynamic_count >= nodynamic_period) {
 				if (!quiet) printf("**NO DYNAMIC**\n");
@@ -368,4 +379,3 @@ int main(int argc, char *argv[])
 
 	return 0;
 }
-
