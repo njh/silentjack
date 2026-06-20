@@ -25,17 +25,17 @@ static const float minus_90_db = 0.00003162327766f;
 static inline float
 db2lin( float db )
 {
-	if (db <= -90.0f) return 0.0f;
-	else {
-		return powf(10.0f, db * 0.05f);
-	}
+    if (db <= -90.0f) return 0.0f;
+    else {
+        return powf(10.0f, db * 0.05f);
+    }
 }
 
 static inline float
 lin2db( float lin )
 {
-	if (lin <= minus_90_db) return -90.0f;
-	else return (20.0f * log10f(lin));
+    if (lin <= minus_90_db) return -90.0f;
+    else return (20.0f * log10f(lin));
 }
 
 #endif
